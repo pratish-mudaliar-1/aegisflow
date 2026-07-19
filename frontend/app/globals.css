@@ -1,0 +1,187 @@
+/* AegisFlow :: app/globals.css */
+/* Design tokens, custom keyframes, scrollbar styles, and base resets */
+
+@import "tailwindcss";
+
+/* ─── CSS Custom Properties (Design Tokens) ─────────────────────────────── */
+:root {
+  /* Fonts */
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-mono), "JetBrains Mono", "Cascadia Code", "Fira Code", monospace;
+
+  /* Emerald compute accent */
+  --color-compute: #34d399;
+  --color-compute-dim: rgba(52, 211, 153, 0.15);
+  --color-compute-glow: rgba(52, 211, 153, 0.25);
+
+  /* Indigo cloud accent */
+  --color-cloud: #818cf8;
+  --color-cloud-dim: rgba(129, 140, 248, 0.15);
+  --color-cloud-glow: rgba(129, 140, 248, 0.25);
+
+  /* Amber governance */
+  --color-govern: #fbbf24;
+  --color-govern-dim: rgba(251, 191, 36, 0.15);
+
+  /* Crimson failure */
+  --color-failure: #fb7185;
+  --color-failure-dim: rgba(251, 113, 133, 0.15);
+
+  /* Surface layers */
+  --surface-0: #030712;   /* zinc-950 */
+  --surface-1: #09090b;   /* zinc-950 variant */
+  --surface-2: #18181b;   /* zinc-900 */
+  --surface-3: #27272a;   /* zinc-800 */
+}
+
+/* ─── Base resets ───────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#__next {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--surface-0);
+  color: #f4f4f5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Monospace elements */
+code,
+pre,
+kbd,
+samp,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* ─── Custom scrollbars ─────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #27272a #09090b;
+}
+
+/* ─── Tailwind scrollbar utilities ──────────────────────────────────────── */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+.scrollbar-track-zinc-950 {
+  scrollbar-color: #27272a #030712;
+}
+
+.scrollbar-thumb-zinc-800 {
+  scrollbar-color: #27272a transparent;
+}
+
+/* ─── Custom animations ─────────────────────────────────────────────────── */
+
+/* Scanning gradient — used on loading states */
+@keyframes scanline {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.scanline-animate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(52, 211, 153, 0.05) 50%, transparent 100%);
+  animation: scanline 2.5s ease-in-out infinite;
+}
+
+/* Glow pulse */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(52, 211, 153, 0.2); }
+  50%       { box-shadow: 0 0 24px rgba(52, 211, 153, 0.5); }
+}
+
+.glow-emerald {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* Amber governance pulse */
+@keyframes amberPulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(251, 191, 36, 0.2); }
+  50%       { box-shadow: 0 0 24px rgba(251, 191, 36, 0.5); }
+}
+
+.glow-amber {
+  animation: amberPulse 2s ease-in-out infinite;
+}
+
+/* Shimmer effect for skeleton loaders */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #18181b 25%, #27272a 37%, #18181b 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* Floating dot animation */
+@keyframes floatDot {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-4px); }
+}
+
+/* ─── Focus ring overrides ──────────────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.5);
+  outline-offset: 2px;
+}
+
+/* ─── Text selection ────────────────────────────────────────────────────── */
+::selection {
+  background: rgba(52, 211, 153, 0.2);
+  color: #ecfdf5;
+}
+
+/* ─── Tailwind base layer overrides ─────────────────────────────────────── */
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  textarea, input {
+    font-family: inherit;
+  }
+}
