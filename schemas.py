@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -175,6 +176,24 @@ class AuditEvent(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Return a plain dictionary representation for JSON serialization."""
         return self.model_dump()
+
+    def verify_fingerprint(self) -> bool:
+        """
+        Verify the integrity of this audit event by recomputing its fingerprint
+        and comparing it to the stored fingerprint. Returns True if valid.
+        """
+        raw_bytes = json.dumps(
+            {
+                "event_type": self.event_type,
+                "node_name": self.node_name,
+                "timestamp_utc": self.timestamp_utc,
+                "payload": self.payload,
+            },
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+        expected = hashlib.sha256(raw_bytes).hexdigest()
+        return secrets.compare_digest(self.fingerprint, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +709,7 @@ class HumanValidationDecision(BaseModel):
     @model_validator(mode="after")
     def edited_arguments_required_on_edit(self) -> "HumanValidationDecision":
         """Enforce that EDIT decisions always supply a corrected arguments dict."""
-        if self.decision == ValidationStatus.EDIT and not self.edited_arguments:
+        if self.decision == ValidationStatus.EDIT and self.edited_arguments is None:
             raise ValueError(
                 "When decision is 'EDIT', you must supply 'edited_arguments' "
                 "containing the corrected tool parameter payload."

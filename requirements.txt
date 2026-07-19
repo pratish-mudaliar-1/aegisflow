@@ -12,21 +12,25 @@ langgraph-checkpoint>=1.0.6         # Checkpoint base classes
 
 # ── Data Validation (Pydantic v2) ────────────────────────────────────────────
 pydantic>=2.7.0                     # v2 required — field_validator, model_validator
-pydantic-settings>=2.3.0            # For future environment variable config
+pydantic-settings>=2.3.0            # For environment variable config
 
 # ── HTTP Client (Integration Plane) ─────────────────────────────────────────
 httpx>=0.27.0                       # Async HTTP client for Ollama + MCP Gateway calls
 
 # ── Async Support ─────────────────────────────────────────────────────────────
 anyio>=4.4.0                        # Async primitives — used by FastAPI/LangGraph
-# asyncio — part of Python stdlib, no install needed
+
+# ── Security ──────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0                # Secure .env loading (replaces custom parser)
+python-multipart>=0.0.9             # Multipart form support for FastAPI file uploads
+cryptography>=42.0.0                # Ed25519 signatures for document attestation
+
+# ── Rate Limiting ──────────────────────────────────────────────────────────────
+slowapi>=0.1.9                      # Token-bucket rate limiting middleware for FastAPI
+limits>=3.6.0                       # slowapi dependency for limit specification
 
 # ── Logging & Observability ──────────────────────────────────────────────────
 python-json-logger>=2.0.7           # Structured JSON log formatting for production
-
-# ── Security ─────────────────────────────────────────────────────────────────
-python-multipart>=0.0.9             # Multipart form support for FastAPI file uploads
-cryptography>=42.0.0                # Ed25519 signatures for document attestation (future)
 
 # ── Development / Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

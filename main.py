@@ -56,11 +56,18 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Path, status
+from fastapi import FastAPI, HTTPException, Path, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.errors import GraphInterrupt
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from auth import require_api_key, require_session_token
+from db import init_db
 from graph import aegisflow_engine
 from schemas import (
     AgentTaskState,
@@ -70,6 +77,7 @@ from schemas import (
     ValidationStatus,
     WorkflowStatusResponse,
 )
+from db import get_all_jobs, get_all_note_metadata
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -131,6 +139,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "Ready to accept workflow sessions."
     )
 
+    # Initialize SQLite database
+    init_db()
+
     # Initialize the in-memory active sessions registry.
     # Maps session_id -> last known AgentTaskState snapshot for status queries.
     app.state.active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -157,6 +168,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # FastAPI Application Instance
 # ---------------------------------------------------------------------------
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="AegisFlow Core API",
     description=(
@@ -171,11 +184,15 @@ app = FastAPI(
         "**Governance:** All mutating tool calls require human validation before execution."
     ),
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if os.getenv("DEBUG", "false").lower() == "true" else None,
+    redoc_url="/redoc" if os.getenv("DEBUG", "false").lower() == "true" else None,
     openapi_url="/api/v1/openapi.json",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # ---------------------------------------------------------------------------
 # CORS Middleware
@@ -443,8 +460,11 @@ def format_sse_workflow_complete(
     status_code=status.HTTP_200_OK,
     tags=["Workflow Orchestration"],
 )
+@limiter.limit("60/minute")
 async def run_workflow(
+    request: Request,
     payload: RunWorkflowRequest,
+    _key: str = Depends(require_api_key),
 ) -> StreamingResponse:
     """
     Primary workflow execution endpoint for the AegisFlow Backend Control Plane.
@@ -803,8 +823,12 @@ async def run_workflow(
     status_code=status.HTTP_200_OK,
     tags=["Workflow Orchestration"],
 )
+@limiter.limit("60/minute")
 async def resume_workflow(
+    request: Request,
     decision: HumanValidationDecision,
+    _key: str = Depends(require_api_key),
+    _token: str = Depends(require_session_token),
 ) -> StreamingResponse:
     """
     Human-in-the-Loop resume endpoint.
@@ -1088,12 +1112,15 @@ async def resume_workflow(
     status_code=status.HTTP_200_OK,
     tags=["Session Management"],
 )
+@limiter.limit("60/minute")
 async def get_workflow_status(
+    request: Request,
     session_id: str = Path(
         description="UUID4 session identifier from the THREAD_INITIALIZED SSE event.",
         min_length=36,
         max_length=36,
     ),
+    _key: str = Depends(require_api_key),
 ) -> WorkflowStatusResponse:
     """
     Non-streaming status query endpoint for workflow session health checks.
@@ -1216,7 +1243,8 @@ async def get_workflow_status(
     status_code=status.HTTP_200_OK,
     tags=["Operations"],
 )
-async def health_check() -> Dict[str, Any]:
+@limiter.limit("60/minute")
+async def health_check(request: Request) -> Dict[str, Any]:
     """
     Liveness probe endpoint returning the server's operational status.
 
@@ -1240,19 +1268,22 @@ async def health_check() -> Dict[str, Any]:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "graph_engine_loaded": engine_loaded,
         "active_sessions_count": active_count,
-        "planes": {
-            "client_ux": "Next.js (external)",
-            "backend_control": "ACTIVE (this server)",
-            "orchestration_recovery": "ACTIVE (LangGraph + MemorySaver)",
-            "integration": "READY (MCP Gateway — production pending)",
-        },
-        "governance": {
-            "hitl_enabled": True,
-            "audit_trail_enabled": True,
-            "token_budget_enforcement": True,
-            "mutating_tool_registry": "ACTIVE",
-        },
     }
+
+
+# ---------------------------------------------------------------------------
+# Endpoints for Dashboard Data
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/data/scheduler", tags=["Data"])
+@limiter.limit("60/minute")
+async def get_scheduler_jobs(request: Request, _key: str = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"jobs": get_all_jobs()}
+
+@app.get("/api/v1/data/notes", tags=["Data"])
+@limiter.limit("60/minute")
+async def get_crypto_notes(request: Request, _key: str = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"notes": get_all_note_metadata()}
 
 
 # ---------------------------------------------------------------------------

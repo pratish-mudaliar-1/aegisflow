@@ -45,7 +45,7 @@ from typing import Any, Dict
 
 import httpx
 
-from schemas import AgentTaskState, AuditEvent, InferencePlane
+from schemas import AgentTaskState, AuditEvent, InferencePlane, MutatingToolRegistry
 
 # ---------------------------------------------------------------------------
 # Module-level logger — all routing decisions are logged at INFO and WARN
@@ -123,17 +123,9 @@ Do not provide any explanation. Your entire response must be only the word SIMPL
 """.strip()
 
 # High-risk tool names that should always be classified as COMPLEX regardless
-# of the LLM's routing evaluation. This list mirrors MutatingToolRegistry and
-# provides a hard-coded safety net in case the model makes an incorrect
-# classification decision.
-ALWAYS_COMPLEX_TOOLS: frozenset = frozenset({
-    "send_enterprise_email",
-    "execute_db_mutation",
-    "authorize_budget",
-    "revoke_access_token",
-    "publish_external_webhook",
-    "schedule_calendar_invite",
-})
+# of the LLM's routing evaluation. Derived dynamically from MutatingToolRegistry
+# to ensure the routing layer never falls out of sync with the governance policy.
+ALWAYS_COMPLEX_TOOLS: frozenset = frozenset(item.value for item in MutatingToolRegistry)
 
 # Keywords in the raw user input that signal high-risk operations requiring
 # cloud-tier reasoning, regardless of the LLM's classification output.
