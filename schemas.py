@@ -536,9 +536,12 @@ class AgentTaskState(BaseModel):
         """
         After full model construction, ensure active_step_index is within the
         bounds of the task_steps array (or 0 if steps are not yet populated).
+        active_step_index == len(task_steps) is a valid sentinel indicating
+        all steps have been processed (workflow complete). Only strictly
+        greater than len(task_steps) is an error.
         This validator runs after all fields are set.
         """
-        if self.task_steps and self.active_step_index >= len(self.task_steps):
+        if self.task_steps and self.active_step_index > len(self.task_steps):
             raise ValueError(
                 f"active_step_index ({self.active_step_index}) exceeds the "
                 f"number of task_steps ({len(self.task_steps)}). "

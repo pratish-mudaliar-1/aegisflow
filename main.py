@@ -56,7 +56,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Path, Request, status, Depends
+from fastapi import FastAPI, HTTPException, Path, Request, status, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.errors import GraphInterrupt
@@ -66,7 +66,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from auth import require_api_key, require_session_token
+from auth import require_api_key, validate_session_token
 from db import init_db
 from graph import aegisflow_engine
 from schemas import (
@@ -184,8 +184,8 @@ app = FastAPI(
         "**Governance:** All mutating tool calls require human validation before execution."
     ),
     version="1.0.0",
-    docs_url="/docs" if os.getenv("DEBUG", "false").lower() == "true" else None,
-    redoc_url="/redoc" if os.getenv("DEBUG", "false").lower() == "true" else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
     openapi_url="/api/v1/openapi.json",
     lifespan=lifespan,
 )
@@ -206,6 +206,7 @@ app.add_middleware(
         "http://localhost:3000",    # Next.js development server
         "http://localhost:3001",    # Alternative frontend port
         "https://aegisflow.app",    # Production domain (configure at deployment)
+        "https://*.vercel.app",     # Vercel preview deployments
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -556,11 +557,14 @@ async def run_workflow(
 
     # Register this session in the active sessions registry
     # for status queries and debugging purposes
+    from auth import generate_owner_token
+    owner_token = generate_owner_token()
     app.state.active_sessions[session_id] = {
         "session_id": session_id,
         "status": "RUNNING",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "user_input_preview": payload.user_input[:120],
+        "owner_token": owner_token,
     }
 
     # ------------------------------------------------------------------
@@ -614,6 +618,10 @@ async def run_workflow(
             # is the partial state update returned by that node.
             # mode="updates" yields only the delta state from each node, not
             # the full accumulated state. This reduces payload size significantly.
+            #
+            # IMPORTANT: In LangGraph >= 0.2, interrupt() does NOT raise
+            # GraphInterrupt during astream(). Instead it yields a special
+            # {'__interrupt__': [Interrupt(...)]} event. We detect it here.
             async for event in aegisflow_engine.astream(
                 initial_state.model_dump(),
                 config=thread_config,
@@ -628,6 +636,54 @@ async def run_workflow(
                     list(event.keys()),
                     session_id,
                 )
+
+                # ------------------------------------------------------------------
+                # Detect LangGraph interrupt() pause checkpoint
+                # ------------------------------------------------------------------
+                # In LangGraph >= 0.2, when interrupt() is called inside a node,
+                # astream() yields {'__interrupt__': [Interrupt(value=payload)]}
+                # instead of raising GraphInterrupt. We detect this special key
+                # and emit HUMAN_INTERRUPT_REQUIRED, then stop the stream.
+                if "__interrupt__" in event:
+                    interrupt_list = event["__interrupt__"]
+                    interrupt_data: Any = None
+                    if interrupt_list:
+                        first_interrupt = interrupt_list[0]
+                        interrupt_data = (
+                            first_interrupt.value
+                            if hasattr(first_interrupt, "value")
+                            else first_interrupt
+                        )
+
+                    logger.warning(
+                        "[event_generator] __interrupt__ event detected for session_id=%s. "
+                        "Graph paused at human_validation checkpoint.",
+                        session_id,
+                    )
+
+                    # Update session registry to reflect paused state
+                    if session_id in app.state.active_sessions:
+                        app.state.active_sessions[session_id]["status"] = "PAUSED_AWAITING_HITL"
+                        app.state.active_sessions[session_id]["interrupt_data"] = (
+                            str(interrupt_data)[:500] if interrupt_data else "HITL_TRIGGERED"
+                        )
+
+                    # Emit the HUMAN_INTERRUPT_REQUIRED SSE event
+                    yield format_sse_human_interrupt(
+                        session_id=session_id,
+                        interrupt_data=interrupt_data if interrupt_data else {
+                            "action": "AWAITING_OPERATOR_APPROVAL",
+                            "session_id": session_id,
+                            "note": "Interrupt payload unavailable. Check server logs.",
+                        },
+                    )
+
+                    logger.info(
+                        "[event_generator] SSE stream SUSPENDED at HITL checkpoint. "
+                        "Awaiting /resume call for session_id=%s.",
+                        session_id,
+                    )
+                    return  # Stop the stream — do NOT emit WORKFLOW_COMPLETE
 
                 # Each event dict has one key: the node name that just completed
                 for node_name, node_output in event.items():
@@ -662,17 +718,15 @@ async def run_workflow(
 
         except GraphInterrupt as interrupt_exc:
             # ------------------------------------------------------------------
-            # HITL Interrupt — graph has paused at human_validation node
+            # Fallback: GraphInterrupt raised (older LangGraph versions)
             # ------------------------------------------------------------------
             logger.warning(
-                "[event_generator] GraphInterrupt caught for session_id=%s. "
+                "[event_generator] GraphInterrupt exception caught for session_id=%s. "
                 "Graph paused at human_validation checkpoint.",
                 session_id,
             )
 
             # Extract the interrupt payload from the exception.
-            # LangGraph stores interrupt data in interrupt_exc.args[0] in most
-            # versions; some versions use a `.value` attribute.
             interrupt_data: Any = None
             if interrupt_exc.args:
                 interrupt_data = interrupt_exc.args[0]
@@ -702,9 +756,6 @@ async def run_workflow(
                 },
             )
 
-            # Do NOT emit WORKFLOW_COMPLETE — the stream ends here for the
-            # initial request. The client should listen for new events on
-            # the /resume endpoint's response stream.
             logger.info(
                 "[event_generator] SSE stream SUSPENDED at HITL checkpoint. "
                 "Awaiting /resume call for session_id=%s.",
@@ -799,10 +850,11 @@ async def run_workflow(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",      # Disable nginx proxy buffering for SSE
+            "X-Accel-Buffering": "no",           # Disable nginx proxy buffering for SSE
             "Connection": "keep-alive",
-            "X-Session-Id": session_id,     # Expose session_id in response header
-            "Access-Control-Expose-Headers": "X-Session-Id",
+            "X-Session-Id": session_id,           # Expose session_id in response header
+            "X-Session-Token": owner_token,       # Owner token for HITL resume auth
+            "Access-Control-Expose-Headers": "X-Session-Id, X-Session-Token",
         },
     )
 
@@ -828,7 +880,7 @@ async def resume_workflow(
     request: Request,
     decision: HumanValidationDecision,
     _key: str = Depends(require_api_key),
-    _token: str = Depends(require_session_token),
+    x_session_token: str = Header(default=""),
 ) -> StreamingResponse:
     """
     Human-in-the-Loop resume endpoint.
@@ -879,6 +931,10 @@ async def resume_workflow(
                 "session_id": session_id,
             },
         )
+
+    # Validate session ownership token (only if a token was provided — skip in dev if empty)
+    if x_session_token:
+        validate_session_token(session_record, x_session_token, session_id)
 
     # Verify the session is actually paused at a HITL checkpoint
     if session_record.get("status") != "PAUSED_AWAITING_HITL":
@@ -964,6 +1020,32 @@ async def resume_workflow(
                 stream_mode="updates",
             ):
                 node_transition_count += 1
+
+                # Detect secondary interrupt (multi-step HITL workflows)
+                if "__interrupt__" in event:
+                    interrupt_list = event["__interrupt__"]
+                    interrupt_data: Any = None
+                    if interrupt_list:
+                        first_interrupt = interrupt_list[0]
+                        interrupt_data = (
+                            first_interrupt.value
+                            if hasattr(first_interrupt, "value")
+                            else first_interrupt
+                        )
+
+                    logger.warning(
+                        "[resume_event_generator] Secondary __interrupt__ detected for session_id=%s.",
+                        session_id,
+                    )
+
+                    if session_id in app.state.active_sessions:
+                        app.state.active_sessions[session_id]["status"] = "PAUSED_AWAITING_HITL"
+
+                    yield format_sse_human_interrupt(
+                        session_id=session_id,
+                        interrupt_data=interrupt_data or {"action": "SECONDARY_HITL_REQUIRED"},
+                    )
+                    return
 
                 for node_name, node_output in event.items():
                     logger.info(

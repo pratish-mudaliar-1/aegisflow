@@ -949,9 +949,12 @@ async def execute_tool(state: AgentTaskState) -> Dict[str, Any]:
         )
 
         final_validation_status = ValidationStatus.FAILED.value
+        # Advance step index so check_workflow_complete can terminate the loop
+        new_step_index = state.active_step_index + 1
 
         return {
             "validation_status": final_validation_status,
+            "active_step_index": new_step_index,
             "task_steps": updated_steps,
             "audit_trail": state.audit_trail,
         }
@@ -1400,9 +1403,16 @@ def build_aegisflow_graph() -> CompiledStateGraph:
 
     # After execute_tool completes, loop to route_task or terminate the graph
     def check_workflow_complete(state: AgentTaskState) -> str:
-        if state.active_step_index < len(state.task_steps):
-            return "route_task"
-        return "END"
+        # Stop if we've processed all steps
+        if state.active_step_index >= len(state.task_steps):
+            return "END"
+        # Stop if tool was explicitly rejected/failed (don't retry failed steps)
+        if state.validation_status in (
+            ValidationStatus.FAILED.value,
+            ValidationStatus.REJECT.value,
+        ):
+            return "END"
+        return "route_task"
 
     builder.add_conditional_edges(
         "execute_tool",
